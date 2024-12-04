@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# WireGuard VPN Monitoring Script
+# This script provides monitoring and maintenance functions for the WireGuard VPN
+
+# Exit on any error
+set -e
+
+# Function to check WireGuard status
+check_wireguard() {
+    echo "WireGuard Interface Status:"
+    sudo wg show
+    echo -e "\nInterface Details:"
+    ip addr show wg0
+}
+
+# Function to check system resources
+check_resources() {
+    echo -e "\nSystem Resource Usage:"
+    echo "CPU Usage:"
+    top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}'
+    echo -e "\nMemory Usage:"
+    free -m
+    echo -e "\nDisk Usage:"
+    df -h /
+}
+
+# Function to check connection logs
+check_logs() {
+    echo -e "\nRecent WireGuard Logs:"
+    sudo journalctl -u wg-quick@wg0 -n 50 --no-pager
+}
+
+# Function to monitor traffic
+monitor_traffic() {
+    echo -e "\nMonitoring Traffic (Press Ctrl+C to stop):"
+    sudo tcpdump -i wg0
+}
+
+# Function to test connectivity
+test_connectivity() {
+    echo -e "\nTesting Connectivity:"
+    ping -c 4 10.9.0.1
+    echo "Testing Internet Access:"
+    curl -s ifconfig.me
+}
+
+# Main menu
+while true; do
+    echo -e "\nWireGuard VPN Monitoring Menu"
+    echo "1. Check WireGuard Status"
+    echo "2. Check System Resources"
+    echo "3. View Recent Logs"
+    echo "4. Monitor Traffic"
+    echo "5. Test Connectivity"
+    echo "6. Exit"
+    
+    read -p "Choose an option: " choice
+    
+    case $choice in
+        1) check_wireguard ;;
+        2) check_resources ;;
+        3) check_logs ;;
+        4) monitor_traffic ;;
+        5) test_connectivity ;;
+        6) exit 0 ;;
+        *) echo "Invalid option" ;;
+    esac
+done

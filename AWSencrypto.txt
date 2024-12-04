@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# Pre-AWS Encryption Setup Script
+# This script sets up additional encryption layer before traffic reaches AWS
+
+# Exit on any error
+set -e
+
+# Install required packages
+sudo yum install -y socat openssl
+
+# Generate SSL certificates for encryption
+mkdir -p ~/vpn-certs
+cd ~/vpn-certs
+
+# Generate CA private key and certificate
+openssl req -x509 -newkey rsa:4096 -days 365 -nodes \
+    -keyout ca-key.pem -out ca-cert.pem -subj "/CN=VPN Root CA"
+
+# Generate server private key and CSR
+openssl req -newkey rsa:4096 -nodes \
+    -keyout server-key.pem -out server.csr -subj "/CN=VPN Server"
+
+# Sign server certificate
+openssl x509 -req -in server.csr \
+    -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial \
+    -out server-cert.pem -days 365
+
+# Generate client private key and CSR
+openssl req -newkey rsa:4096 -nodes \
+    -keyout client-key.pem -out client.csr -subj "/CN=VPN Client"
+
+# Sign client certificate
+openssl x509 -req -in client.csr \
+    -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial \
+    -out client-cert.pem -days 365
+
+# Create encryption service
+cat << 'EOF' | sudo tee /usr/local/bin/vpn-encrypt.sh
+#!/bin/bash
+socat OPENSSL-LISTEN:51821,cert=~/vpn-certs/server-cert.pem,key=~/vpn-certs/server-key.pem,cafile=~/vpn-certs/ca-cert.pem,verify=1 TUN:10.9.1.1/24,up
+EOF
+
+# Create decryption service
+cat << 'EOF' | sudo tee /usr/local/bin/vpn-decrypt.sh
+#!/bin/bash
+socat TUN:10.9.1.2/24,up OPENSSL:server:51821,cert=~/vpn-certs/client-cert.pem,key=~/vpn-certs/client-key.pem,cafile=~/vpn-certs/ca-cert.pem
+EOF
+
+# Make scripts executable
+sudo chmod +x /usr/local/bin/vpn-encrypt.sh
+sudo chmod +x /usr/local/bin/vpn-decrypt.sh
+
+# Create systemd service for encryption
+cat << 'EOF' | sudo tee /etc/systemd/system/vpn-encrypt.service
+[Unit]
+Description=VPN Pre-encryption Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/vpn-encrypt.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Create systemd service for decryption
+cat << 'EOF' | sudo tee /etc/systemd/system/vpn-decrypt.service
+[Unit]
+Description=VPN Decryption Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/vpn-decrypt.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Update routing for encrypted tunnel
+cat << 'EOF' | sudo tee /usr/local/bin/vpn-routes.sh
+#!/bin/bash
+ip route add 10.9.1.0/24 dev tun0
+iptables -A FORWARD -i tun0 -j ACCEPT
+iptables -A FORWARD -o tun0 -j ACCEPT
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+EOF
+
+sudo chmod +x /usr/local/bin/vpn-routes.sh
+
+# Enable and start services
+sudo systemctl daemon-reload
+sudo systemctl enable vpn-encrypt.service
+sudo systemctl enable vpn-decrypt.service
+sudo systemctl start vpn-encrypt.service
+sudo systemctl start vpn-decrypt.service
+
+echo "Pre-AWS encryption layer setup complete!"
+echo "Certificates are stored in ~/vpn-certs/"
+echo "Services are running and will start automatically on boot"
